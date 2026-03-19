@@ -97,6 +97,26 @@ def _replay_previous_output(
             console.print()
 
 
+def _build_resume_context_message(state: Any, iteration: int) -> None:
+    """Inject a user message telling the LLM it was interrupted and must continue.
+
+    Added for Resume Feature — prevents the model from calling finish_scan or
+    agent_finish just because the message history ends abruptly (e.g. a dangling
+    sub-agent tool call that never got a result).
+    """
+    msg = (
+        f"[SYSTEM - SCAN RESUMED]\n"
+        f"This penetration test was interrupted at iteration {iteration}. "
+        f"All sub-agents that were running have been terminated along with their sandbox. "
+        f"A fresh sandbox will be created automatically. "
+        f"Review the conversation history above to understand what has already been done, "
+        f"then CONTINUE the penetration test from where it left off. "
+        f"Do NOT call finish_scan or agent_finish unless all testing is genuinely complete. "
+        f"Re-spawn any sub-agents needed to continue uncompleted work."
+    )
+    state.add_message("user", msg)
+
+
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console = Console()
 
@@ -125,14 +145,18 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         resumed_state.sandbox_token = None
         resumed_state.sandbox_info = None
 
-        # Fix: reset any blocking flags that were set when the scan was interrupted.
-        # If the scan was paused mid-wait the restored state would still have
-        # waiting_for_input=True / stop_requested=True and the loop would freeze.
+        # Reset any blocking flags set at the moment of interruption
         resumed_state.waiting_for_input = False
         resumed_state.waiting_start_time = None
         resumed_state.stop_requested = False
         resumed_state.completed = False
         resumed_state.llm_failed = False
+
+        # Inject a resume-context message so the LLM does NOT call finish_scan
+        # or agent_finish just because the history ended abruptly.
+        # Without this the model sees a dangling tool call (sub-agent that was
+        # killed mid-execution) and may decide the task is complete or broken.
+        _build_resume_context_message(resumed_state, checkpoint_data.iteration)
 
     start_text = Text()
     if is_resuming:

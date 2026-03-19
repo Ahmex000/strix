@@ -41,6 +41,25 @@ from strix.telemetry.tracer import Tracer, set_global_tracer
 logger = logging.getLogger(__name__)
 
 
+def _inject_resume_context_message(state: Any, iteration: int) -> None:
+    """Inject a user message telling the LLM it was interrupted and must continue.
+
+    Added for Resume Feature — prevents the model from calling finish_scan or
+    agent_finish just because the message history ends abruptly.
+    """
+    msg = (
+        f"[SYSTEM - SCAN RESUMED]\n"
+        f"This penetration test was interrupted at iteration {iteration}. "
+        f"All sub-agents that were running have been terminated along with their sandbox. "
+        f"A fresh sandbox will be created automatically. "
+        f"Review the conversation history above to understand what has already been done, "
+        f"then CONTINUE the penetration test from where it left off. "
+        f"Do NOT call finish_scan or agent_finish unless all testing is genuinely complete. "
+        f"Re-spawn any sub-agents needed to continue uncompleted work."
+    )
+    state.add_message("user", msg)
+
+
 def get_package_version() -> str:
     try:
         return pkg_version("strix-agent")
@@ -790,6 +809,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
             resumed_state.stop_requested = False
             resumed_state.completed = False
             resumed_state.llm_failed = False
+            # Inject resume-context message so the LLM does NOT call finish_scan
+            # or agent_finish just because the history ended abruptly.
+            _inject_resume_context_message(resumed_state, _cp.iteration)
             config["state"] = resumed_state
 
         _mgr = getattr(args, "_checkpoint_manager", None)
