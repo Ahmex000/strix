@@ -2139,6 +2139,22 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
             self._scan_thread.join(timeout=1.0)
 
+        # Explicitly save checkpoint here so it is always persisted before the
+        # TUI exits, regardless of whether atexit handlers run reliably after
+        # Textual's exit() call.
+        _mgr = self.agent_config.get("checkpoint_manager")
+        _agent = getattr(self, "_current_agent", None)
+        if _mgr and _agent:
+            import contextlib
+            with contextlib.suppress(Exception):
+                _mgr.save(
+                    _agent.state,
+                    self.tracer,
+                    self.scan_config,
+                    self.agent_config.get("target_hash", ""),
+                    _agent.max_iterations,
+                )
+
         self.tracer.cleanup()
 
         self.exit()

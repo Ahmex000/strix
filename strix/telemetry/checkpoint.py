@@ -12,9 +12,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _json_default(obj: Any) -> Any:
+    """Fallback serialiser for objects json.dumps cannot handle natively."""
+    if hasattr(obj, "isoformat"):
+        return obj.isoformat()
+    if hasattr(obj, "model_dump"):
+        return obj.model_dump(mode="json")
+    return str(obj)
+
 
 CHECKPOINT_VERSION = "1.0"
 
@@ -106,7 +117,7 @@ class CheckpointManager:
             self.run_dir.mkdir(parents=True, exist_ok=True)
 
             state_dict: dict[str, Any] = (
-                agent_state.model_dump() if hasattr(agent_state, "model_dump") else {}
+                agent_state.model_dump(mode="json") if hasattr(agent_state, "model_dump") else {}
             )
 
             tracer_chat_messages: list[dict[str, Any]] = []
@@ -137,7 +148,7 @@ class CheckpointManager:
                     s = getattr(inst, "state", None)
                     if s is not None and s.parent_id is not None:
                         sub_agent_states[sid] = (
-                            s.model_dump() if hasattr(s, "model_dump") else {}
+                            s.model_dump(mode="json") if hasattr(s, "model_dump") else {}
                         )
             except Exception:  # noqa: BLE001
                 pass
@@ -157,8 +168,13 @@ class CheckpointManager:
                 sub_agent_states=sub_agent_states,
             )
 
-            # Atomic write: .tmp → rename
-            self._tmp_path.write_text(checkpoint.model_dump_json(indent=2), encoding="utf-8")
+            # Atomic write: .tmp → rename.  Use json.dumps with a fallback
+            # serialiser so non-standard objects (datetime, Pydantic models,
+            # etc.) never silently abort the save.
+            json_str = json.dumps(
+                checkpoint.model_dump(mode="json"), indent=2, default=_json_default
+            )
+            self._tmp_path.write_text(json_str, encoding="utf-8")
             os.rename(self._tmp_path, self.checkpoint_path)
 
         except Exception as e:  # noqa: BLE001

@@ -314,7 +314,8 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     results_text = Text()
     results_text.append("Output", style="dim")
     results_text.append("  ")
-    results_text.append(f"strix_runs/{args.run_name}", style="#60a5fa")
+    from pathlib import Path
+    results_text.append(str(Path.home() / "strix_runs" / args.run_name), style="#60a5fa")
 
     note_text = Text()
     note_text.append("\n\n", style="dim")

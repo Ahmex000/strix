@@ -606,20 +606,22 @@ def _setup_checkpoint_on_args(args: argparse.Namespace) -> None:
     args._checkpoint_data = None
     args.resume_from_checkpoint = False
 
+    strix_runs = Path.home() / "strix_runs"
+
     if args.force_new:
         # Delete any checkpoint for the current run name (if explicit) and start fresh
         if args.run_name:
-            run_dir = Path("strix_runs") / args.run_name
+            run_dir = strix_runs / args.run_name
             CheckpointManager(args.run_name, run_dir).delete()
         if not args.run_name:
             args.run_name = generate_run_name(args.targets_info)
-        run_dir = Path("strix_runs") / args.run_name
+        run_dir = strix_runs / args.run_name
         args._checkpoint_manager = CheckpointManager(args.run_name, run_dir)
         return
 
     # If no explicit run name, try auto-detect by target hash
     if not args.run_name:
-        found = _find_checkpoint_by_target_hash(Path("strix_runs"), target_hash)
+        found = _find_checkpoint_by_target_hash(strix_runs, target_hash)
         if found:
             run_name, checkpoint = found
             console = Console()
@@ -629,7 +631,7 @@ def _setup_checkpoint_on_args(args: argparse.Namespace) -> None:
                 f"[dim]Use --new to start fresh.[/]"
             )
             args.run_name = run_name
-            run_dir = Path("strix_runs") / run_name
+            run_dir = strix_runs / run_name
             args._checkpoint_manager = CheckpointManager(run_name, run_dir)
             args._checkpoint_data = checkpoint
             args.resume_from_checkpoint = True
@@ -638,7 +640,7 @@ def _setup_checkpoint_on_args(args: argparse.Namespace) -> None:
         args.run_name = generate_run_name(args.targets_info)
 
     # Explicit run name (or freshly generated) — look for its checkpoint
-    run_dir = Path("strix_runs") / args.run_name
+    run_dir = strix_runs / args.run_name
     mgr = CheckpointManager(args.run_name, run_dir)
     args._checkpoint_manager = mgr
 
@@ -727,7 +729,7 @@ def main() -> None:
         if tracer:
             posthog.end(tracer, exit_reason=exit_reason)
 
-    results_path = Path("strix_runs") / args.run_name
+    results_path = Path.home() / "strix_runs" / args.run_name
     display_completion_message(args, results_path)
 
     if args.non_interactive:
