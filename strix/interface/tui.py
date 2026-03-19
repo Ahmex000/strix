@@ -753,6 +753,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self._scan_thread: threading.Thread | None = None
         self._scan_stop_event = threading.Event()
         self._scan_completed = threading.Event()
+        self._current_agent: Any | None = None  # set in _start_scan_thread for checkpointing
 
         self._spinner_frame_index: int = 0  # Current animation frame index
         self._sweep_num_squares: int = 6  # Number of squares in sweep animation
@@ -823,13 +824,32 @@ class StrixTUIApp(App):  # type: ignore[misc]
         return config
 
     def _setup_cleanup_handlers(self) -> None:
+        # Added for Resume Feature — save checkpoint on interrupt
+        def _save_checkpoint_on_interrupt() -> None:
+            mgr = self.agent_config.get("checkpoint_manager")
+            agent = getattr(self, "_current_agent", None)
+            if not mgr or not agent:
+                return
+            try:
+                mgr.save(
+                    agent.state,
+                    self.tracer,
+                    self.scan_config,
+                    self.agent_config.get("target_hash", ""),
+                    agent.max_iterations,
+                )
+            except Exception:  # noqa: BLE001
+                pass  # non-fatal
+
         def cleanup_on_exit() -> None:
             from strix.runtime import cleanup_runtime
 
+            _save_checkpoint_on_interrupt()
             self.tracer.cleanup()
             cleanup_runtime()
 
         def signal_handler(_signum: int, _frame: Any) -> None:
+            _save_checkpoint_on_interrupt()
             self.tracer.cleanup()
             sys.exit(0)
 
@@ -1538,6 +1558,7 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
                 try:
                     agent = StrixAgent(self.agent_config)
+                    self._current_agent = agent  # expose for checkpoint on interrupt
 
                     if not self._scan_stop_event.is_set():
                         loop.run_until_complete(agent.execute_scan(self.scan_config))

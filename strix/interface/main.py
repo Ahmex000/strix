@@ -546,6 +546,48 @@ def persist_config() -> None:
         save_current_config()
 
 
+def _find_checkpoint_by_target_hash(
+    strix_runs_dir: "Path", target_hash: str
+) -> "tuple[str, Any] | None":
+    """Scan strix_runs/ for the most recent checkpoint matching *target_hash*.
+
+    Returns ``(run_name, CheckpointModel)`` or ``None``.
+    Added for Resume Feature — enables auto-resume without --run-name.
+    """
+    import json
+
+    from strix.telemetry.checkpoint import CheckpointModel
+
+    if not strix_runs_dir.exists():
+        return None
+
+    best_run_name: str | None = None
+    best_cp: Any = None
+    best_time: str = ""
+
+    for run_dir in strix_runs_dir.iterdir():
+        if not run_dir.is_dir():
+            continue
+        cp_path = run_dir / "checkpoint.json"
+        if not cp_path.exists():
+            continue
+        try:
+            raw = json.loads(cp_path.read_text(encoding="utf-8"))
+            if raw.get("target_hash") != target_hash:
+                continue
+            saved_at = raw.get("saved_at", "")
+            if best_run_name is None or saved_at > best_time:
+                best_cp = CheckpointModel.model_validate(raw)
+                best_run_name = run_dir.name
+                best_time = saved_at
+        except Exception:  # noqa: BLE001
+            continue
+
+    if best_run_name and best_cp:
+        return (best_run_name, best_cp)
+    return None
+
+
 def _setup_checkpoint_on_args(args: argparse.Namespace) -> None:
     """Resolve checkpoint / resume state and attach it to ``args``.
 
@@ -559,42 +601,71 @@ def _setup_checkpoint_on_args(args: argparse.Namespace) -> None:
 
     from strix.telemetry.checkpoint import CheckpointManager, compute_target_hash
 
-    run_dir = Path("strix_runs") / args.run_name
-    mgr = CheckpointManager(args.run_name, run_dir)
     target_hash = compute_target_hash(args.targets_info)
-
-    args._checkpoint_manager = mgr
     args._target_hash = target_hash
     args._checkpoint_data = None
     args.resume_from_checkpoint = False
 
     if args.force_new:
-        mgr.delete()
+        # Delete any checkpoint for the current run name (if explicit) and start fresh
+        if args.run_name:
+            run_dir = Path("strix_runs") / args.run_name
+            CheckpointManager(args.run_name, run_dir).delete()
+        if not args.run_name:
+            args.run_name = generate_run_name(args.targets_info)
+        run_dir = Path("strix_runs") / args.run_name
+        args._checkpoint_manager = CheckpointManager(args.run_name, run_dir)
         return
 
-    if mgr.exists():
-        checkpoint = mgr.load()
-        if checkpoint is None:
-            # Corrupted checkpoint — warn and start fresh
+    # If no explicit run name, try auto-detect by target hash
+    if not args.run_name:
+        found = _find_checkpoint_by_target_hash(Path("strix_runs"), target_hash)
+        if found:
+            run_name, checkpoint = found
             console = Console()
             console.print(
-                "[bold yellow]Warning:[/] Checkpoint file is corrupted or unreadable. "
-                "Starting a fresh scan."
+                f"[bold #22c55e]Auto-resuming previous scan[/] "
+                f"[dim](run: {run_name})[/]  "
+                f"[dim]Use --new to start fresh.[/]"
             )
+            args.run_name = run_name
+            run_dir = Path("strix_runs") / run_name
+            args._checkpoint_manager = CheckpointManager(run_name, run_dir)
+            args._checkpoint_data = checkpoint
+            args.resume_from_checkpoint = True
             return
+        # No checkpoint found — generate a fresh run name
+        args.run_name = generate_run_name(args.targets_info)
 
-        if checkpoint.target_hash != target_hash:
-            console = Console()
-            console.print(
-                "[bold yellow]Warning:[/] Checkpoint target mismatch "
-                f"(run '{args.run_name}' was for a different target). "
-                "Starting a fresh scan."
-            )
-            return
+    # Explicit run name (or freshly generated) — look for its checkpoint
+    run_dir = Path("strix_runs") / args.run_name
+    mgr = CheckpointManager(args.run_name, run_dir)
+    args._checkpoint_manager = mgr
 
-        # Valid checkpoint found — auto-resume (or explicit --resume)
-        args._checkpoint_data = checkpoint
-        args.resume_from_checkpoint = True
+    if not mgr.exists():
+        return
+
+    checkpoint = mgr.load()
+    if checkpoint is None:
+        console = Console()
+        console.print(
+            "[bold yellow]Warning:[/] Checkpoint file is corrupted or unreadable. "
+            "Starting a fresh scan."
+        )
+        return
+
+    if checkpoint.target_hash != target_hash:
+        console = Console()
+        console.print(
+            "[bold yellow]Warning:[/] Checkpoint target mismatch "
+            f"(run '{args.run_name}' was for a different target). "
+            "Starting a fresh scan."
+        )
+        return
+
+    # Valid checkpoint found — resume
+    args._checkpoint_data = checkpoint
+    args.resume_from_checkpoint = True
 
 
 def main() -> None:
@@ -614,12 +685,10 @@ def main() -> None:
 
     persist_config()
 
-    # Added for Resume Feature — determine run_name and whether to resume
-    if args.run_name_override:
-        args.run_name = args.run_name_override
-    else:
-        args.run_name = generate_run_name(args.targets_info)
-
+    # Added for Resume Feature — determine run_name and whether to resume.
+    # _setup_checkpoint_on_args sets args.run_name (using override if given,
+    # auto-detecting by target hash, or generating a fresh name as fallback).
+    args.run_name = getattr(args, "run_name_override", None) or None
     _setup_checkpoint_on_args(args)
 
     for target_info in args.targets_info:

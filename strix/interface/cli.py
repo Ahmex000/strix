@@ -273,13 +273,35 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
     tracer.vulnerability_found_callback = display_vulnerability
 
+    # Added for Resume Feature — mutable container so the nested closures can
+    # update the reference once the agent is created.
+    _agent_ref: list[Any] = []
+
+    def _save_checkpoint_on_interrupt() -> None:
+        """Persist current agent state before exit so the scan can be resumed."""
+        if not checkpoint_manager or not _agent_ref:
+            return
+        try:
+            agent_instance = _agent_ref[0]
+            checkpoint_manager.save(
+                agent_instance.state,
+                tracer,
+                scan_config,
+                target_hash,
+                agent_instance.max_iterations,
+            )
+        except Exception:  # noqa: BLE001
+            pass  # non-fatal
+
     def cleanup_on_exit() -> None:
         from strix.runtime import cleanup_runtime
 
+        _save_checkpoint_on_interrupt()
         tracer.cleanup()
         cleanup_runtime()
 
     def signal_handler(_signum: int, _frame: Any) -> None:
+        _save_checkpoint_on_interrupt()
         tracer.cleanup()
         sys.exit(1)
 
@@ -329,6 +351,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
 
             try:
                 agent = StrixAgent(agent_config)
+                _agent_ref.append(agent)  # expose to interrupt handler
                 result = await agent.execute_scan(scan_config)
 
                 if isinstance(result, dict) and not result.get("success", True):
