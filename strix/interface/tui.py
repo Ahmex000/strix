@@ -709,20 +709,17 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.tracer.set_scan_config(self.scan_config)
         set_global_tracer(self.tracer)
 
-        # Added for Resume Feature — pre-populate tracer with checkpoint data so
-        # stats and findings reflect the full scan history including past sessions.
-        # Also restores sub-agents and their tool executions so the TUI sidebar
-        # shows every agent (completed or in-progress) from the previous session.
+        # Added for Resume Feature — restore conversation history and findings.
+        # We do NOT restore tracer.agents or tracer.tool_executions because old
+        # sub-agent entries become "ghost" agents: visible in the sidebar, impossible
+        # to interact with, and they break message routing for new sub-agents spawned
+        # in the resumed session. The root agent's LLM message history already
+        # contains everything the sub-agents did — that is enough to resume correctly.
         _cp = getattr(args, "_checkpoint_data", None)
         if _cp and getattr(args, "resume_from_checkpoint", False):
             self.tracer.chat_messages.extend(_cp.tracer_chat_messages)
             self.tracer.vulnerability_reports.extend(_cp.tracer_vulnerability_reports)
-            # Restore full agent registry (root + all sub-agents)
-            self.tracer.agents.update(_cp.tracer_agents)
-            # Restore tool execution records (keys were serialised as str)
-            for k, v in _cp.tracer_tool_executions.items():
-                self.tracer.tool_executions[int(k)] = v
-            # Advance execution ID counter to avoid collisions
+            # Advance execution ID counter past previous session IDs
             if _cp.tracer_next_execution_id > self.tracer._next_execution_id:
                 self.tracer._next_execution_id = _cp.tracer_next_execution_id
 
@@ -787,6 +784,12 @@ class StrixTUIApp(App):  # type: ignore[misc]
             resumed_state.sandbox_id = None
             resumed_state.sandbox_token = None
             resumed_state.sandbox_info = None
+            # Reset any blocking flags set at the moment of interruption
+            resumed_state.waiting_for_input = False
+            resumed_state.waiting_start_time = None
+            resumed_state.stop_requested = False
+            resumed_state.completed = False
+            resumed_state.llm_failed = False
             config["state"] = resumed_state
 
         _mgr = getattr(args, "_checkpoint_manager", None)

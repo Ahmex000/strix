@@ -120,11 +120,19 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         )
         resumed_state.max_iterations_warning_sent = False  # Reset warning flag
 
-        # Clear sandbox so a fresh container is always created on resume
-        # (the old container may be gone).
+        # Clear sandbox — old container is gone, always start fresh
         resumed_state.sandbox_id = None
         resumed_state.sandbox_token = None
         resumed_state.sandbox_info = None
+
+        # Fix: reset any blocking flags that were set when the scan was interrupted.
+        # If the scan was paused mid-wait the restored state would still have
+        # waiting_for_input=True / stop_requested=True and the loop would freeze.
+        resumed_state.waiting_for_input = False
+        resumed_state.waiting_start_time = None
+        resumed_state.stop_requested = False
+        resumed_state.completed = False
+        resumed_state.llm_failed = False
 
     start_text = Text()
     if is_resuming:
@@ -203,17 +211,18 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
 
-    # Added for Resume Feature — pre-populate tracer so stats/vulns are correct
-    # Also restores sub-agent registry and tool executions so the full run is visible
+    # Added for Resume Feature — restore conversation history and findings.
+    # NOTE: We intentionally do NOT restore tracer.agents or tracer.tool_executions.
+    # Injecting old sub-agent entries creates "ghost" agents: they appear in the
+    # sidebar with no live instance, can't receive messages, and block real sub-agents
+    # spawned in the new session from communicating with the root agent.
+    # The root agent's full LLM context (in resumed_state.messages) already knows
+    # what every sub-agent did — that is sufficient to continue correctly.
     if is_resuming and checkpoint_data:
         tracer.chat_messages.extend(checkpoint_data.tracer_chat_messages)
         tracer.vulnerability_reports.extend(checkpoint_data.tracer_vulnerability_reports)
-        # Restore every agent (root + sub-agents) with their last-known status
-        tracer.agents.update(checkpoint_data.tracer_agents)
-        # Restore tool execution records; keys were serialised as str, restore as int
-        for k, v in checkpoint_data.tracer_tool_executions.items():
-            tracer.tool_executions[int(k)] = v
-        # Advance the ID counter so new executions don't overwrite saved ones
+        # Advance execution ID counter past old IDs to avoid collisions with
+        # tool executions the live scan will create.
         if checkpoint_data.tracer_next_execution_id > tracer._next_execution_id:
             tracer._next_execution_id = checkpoint_data.tracer_next_execution_id
 
