@@ -711,10 +711,20 @@ class StrixTUIApp(App):  # type: ignore[misc]
 
         # Added for Resume Feature — pre-populate tracer with checkpoint data so
         # stats and findings reflect the full scan history including past sessions.
+        # Also restores sub-agents and their tool executions so the TUI sidebar
+        # shows every agent (completed or in-progress) from the previous session.
         _cp = getattr(args, "_checkpoint_data", None)
         if _cp and getattr(args, "resume_from_checkpoint", False):
             self.tracer.chat_messages.extend(_cp.tracer_chat_messages)
             self.tracer.vulnerability_reports.extend(_cp.tracer_vulnerability_reports)
+            # Restore full agent registry (root + all sub-agents)
+            self.tracer.agents.update(_cp.tracer_agents)
+            # Restore tool execution records (keys were serialised as str)
+            for k, v in _cp.tracer_tool_executions.items():
+                self.tracer.tool_executions[int(k)] = v
+            # Advance execution ID counter to avoid collisions
+            if _cp.tracer_next_execution_id > self.tracer._next_execution_id:
+                self.tracer._next_execution_id = _cp.tracer_next_execution_id
 
         self.agent_nodes: dict[str, TreeNode] = {}
 

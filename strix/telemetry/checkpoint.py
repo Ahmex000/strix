@@ -41,6 +41,13 @@ class CheckpointModel(BaseModel):
     tracer_chat_messages: list[dict[str, Any]] = Field(default_factory=list)
     tracer_vulnerability_reports: list[dict[str, Any]] = Field(default_factory=list)
 
+    # Added for sub-agent persistence: full agent registry and tool execution log
+    # tracer.agents  → every agent (root + sub) with status, name, task, parent_id
+    # tracer.tool_executions → every tool call result across all agents
+    tracer_agents: dict[str, Any] = Field(default_factory=dict)
+    tracer_tool_executions: dict[str, Any] = Field(default_factory=dict)  # key is str(int)
+    tracer_next_execution_id: int = 1  # restore the ID counter so new IDs don't collide
+
     # Original scan configuration (passed to execute_scan)
     scan_config: dict[str, Any] = Field(default_factory=dict)
 
@@ -100,11 +107,21 @@ class CheckpointManager:
 
             tracer_chat_messages: list[dict[str, Any]] = []
             tracer_vulnerability_reports: list[dict[str, Any]] = []
+            tracer_agents: dict[str, Any] = {}
+            tracer_tool_executions: dict[str, Any] = {}
+            tracer_next_execution_id: int = 1
             if tracer:
                 tracer_chat_messages = list(getattr(tracer, "chat_messages", []))
                 tracer_vulnerability_reports = list(
                     getattr(tracer, "vulnerability_reports", [])
                 )
+                # Added for sub-agent persistence — capture full agent registry
+                # and all tool execution records so sub-agents are fully restored
+                tracer_agents = dict(getattr(tracer, "agents", {}))
+                # tool_executions keys are ints; serialise as strings for JSON
+                raw_execs = getattr(tracer, "tool_executions", {})
+                tracer_tool_executions = {str(k): v for k, v in raw_execs.items()}
+                tracer_next_execution_id = getattr(tracer, "_next_execution_id", 1)
 
             checkpoint = CheckpointModel(
                 run_name=self.run_name,
@@ -114,6 +131,9 @@ class CheckpointManager:
                 agent_state=state_dict,
                 tracer_chat_messages=tracer_chat_messages,
                 tracer_vulnerability_reports=tracer_vulnerability_reports,
+                tracer_agents=tracer_agents,
+                tracer_tool_executions=tracer_tool_executions,
+                tracer_next_execution_id=tracer_next_execution_id,
                 scan_config=scan_config,
             )
 

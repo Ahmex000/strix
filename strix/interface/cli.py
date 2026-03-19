@@ -204,9 +204,18 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     tracer.set_scan_config(scan_config)
 
     # Added for Resume Feature — pre-populate tracer so stats/vulns are correct
+    # Also restores sub-agent registry and tool executions so the full run is visible
     if is_resuming and checkpoint_data:
         tracer.chat_messages.extend(checkpoint_data.tracer_chat_messages)
         tracer.vulnerability_reports.extend(checkpoint_data.tracer_vulnerability_reports)
+        # Restore every agent (root + sub-agents) with their last-known status
+        tracer.agents.update(checkpoint_data.tracer_agents)
+        # Restore tool execution records; keys were serialised as str, restore as int
+        for k, v in checkpoint_data.tracer_tool_executions.items():
+            tracer.tool_executions[int(k)] = v
+        # Advance the ID counter so new executions don't overwrite saved ones
+        if checkpoint_data.tracer_next_execution_id > tracer._next_execution_id:
+            tracer._next_execution_id = checkpoint_data.tracer_next_execution_id
 
     # Added for Resume Feature — show resume banner + replay previous output
     if is_resuming and checkpoint_data:
