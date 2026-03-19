@@ -82,6 +82,9 @@ class BaseAgent(metaclass=AgentMeta):
         self._checkpoint_manager = config.get("checkpoint_manager")
         self._scan_config: dict[str, Any] = config.get("scan_config", {})
         self._target_hash: str = config.get("target_hash", "")
+        # True when this agent (root OR sub) is being restored from a checkpoint.
+        # Prevents _initialize_sandbox_and_state from adding a duplicate task message.
+        self._is_resumed: bool = bool(config.get("is_resumed", False))
 
         with contextlib.suppress(Exception):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
@@ -382,14 +385,10 @@ class BaseAgent(metaclass=AgentMeta):
         if not self.state.task:
             self.state.task = task
 
-        # Added for Resume Feature: only skip the task message when this is the
-        # ROOT agent being resumed (parent_id is None AND messages already has
-        # history from the checkpoint).
-        # Sub-agents can have pre-loaded context messages and still need their task
-        # message added — the old `if not self.state.messages` guard broke them.
-        # Original behavior is 100% unchanged for all non-resume paths.
-        _is_root_resume = (self.state.parent_id is None and bool(self.state.messages))
-        if not _is_root_resume:
+        # Skip adding the task message when this agent (root or sub) is being
+        # restored from a checkpoint — the full message history including the
+        # task is already present.  Fresh agents always get the task message.
+        if not self._is_resumed:
             self.state.add_message("user", task)
 
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool | None:

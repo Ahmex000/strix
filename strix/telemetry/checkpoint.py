@@ -51,6 +51,10 @@ class CheckpointModel(BaseModel):
     # Original scan configuration (passed to execute_scan)
     scan_config: dict[str, Any] = Field(default_factory=dict)
 
+    # Full AgentState dumps for every non-root, non-completed sub-agent.
+    # Keyed by agent_id so they can be restored with their original IDs.
+    sub_agent_states: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
 
 def compute_target_hash(targets_info: list[dict[str, Any]]) -> str:
     """Return a short stable hash of the target list for checkpoint validation.
@@ -123,6 +127,21 @@ class CheckpointManager:
                 tracer_tool_executions = {str(k): v for k, v in raw_execs.items()}
                 tracer_next_execution_id = getattr(tracer, "_next_execution_id", 1)
 
+            # Capture full AgentState for every running sub-agent so they
+            # can be restored with their complete message history on resume.
+            sub_agent_states: dict[str, Any] = {}
+            try:
+                from strix.tools.agents_graph import agents_graph_actions
+
+                for sid, inst in list(agents_graph_actions._agent_instances.items()):
+                    s = getattr(inst, "state", None)
+                    if s is not None and s.parent_id is not None:
+                        sub_agent_states[sid] = (
+                            s.model_dump() if hasattr(s, "model_dump") else {}
+                        )
+            except Exception:  # noqa: BLE001
+                pass
+
             checkpoint = CheckpointModel(
                 run_name=self.run_name,
                 target_hash=target_hash,
@@ -135,6 +154,7 @@ class CheckpointManager:
                 tracer_tool_executions=tracer_tool_executions,
                 tracer_next_execution_id=tracer_next_execution_id,
                 scan_config=scan_config,
+                sub_agent_states=sub_agent_states,
             )
 
             # Atomic write: .tmp → rename

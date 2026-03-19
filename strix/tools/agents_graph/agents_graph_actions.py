@@ -271,7 +271,10 @@ def create_agent(
                 for msg in agent_state.get_conversation_history()
                 if not (
                     isinstance(msg.get("content"), str)
-                    and msg["content"].startswith("[SYSTEM - SCAN RESUMED]")
+                    and (
+                        msg["content"].startswith("[SYSTEM - SCAN RESUMED]")
+                        or msg["content"].startswith("[SYSTEM - SUB-AGENT RESUMED]")
+                    )
                 )
             ]
 
