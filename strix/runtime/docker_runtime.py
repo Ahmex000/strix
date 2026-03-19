@@ -2,9 +2,10 @@ import contextlib
 import os
 import secrets
 import socket
+import subprocess
 import time
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import docker
 import httpx
@@ -39,6 +40,11 @@ class DockerRuntime(AbstractRuntime):
         self._tool_server_port: int | None = None
         self._tool_server_token: str | None = None
         self._caido_port: int | None = None
+        # On the first call we always create a fresh container so we never
+        # accidentally reuse a stale container left over from a previous run
+        # whose async docker-rm hasn't finished yet (race condition that causes
+        # "Container X not found" errors mid-scan).
+        self._needs_fresh_container: bool = True
 
     def _find_available_port(self) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -108,6 +114,61 @@ class DockerRuntime(AbstractRuntime):
             "Container initialization timed out. Please try again.",
         )
 
+    def _cleanup_existing_containers(self, container_name: str, scan_id: str) -> None:
+        """Synchronously remove every container that could block creation of a
+        new one with *container_name*.
+
+        Uses the Docker CLI via ``subprocess.run()`` so the call **blocks**
+        until Docker has fully completed the removal *and* freed the name.
+        The Python SDK's ``remove(force=True)`` can return while Docker's
+        internal name registry still holds the name, causing the next
+        ``containers.run(name=...)`` call to fail with 409 Conflict.
+        """
+        # Collect IDs via both name-filter and scan-id label so we catch
+        # containers that are mid-removal and no longer findable by name.
+        ids_to_remove: list[str] = []
+
+        with contextlib.suppress(DockerException):
+            for c in self.client.containers.list(
+                all=True, filters={"name": container_name}
+            ):
+                cid = getattr(c, "id", None)
+                if cid and cid not in ids_to_remove:
+                    ids_to_remove.append(cid)
+
+        with contextlib.suppress(DockerException):
+            for c in self.client.containers.list(
+                all=True, filters={"label": f"strix-scan-id={scan_id}"}
+            ):
+                cid = getattr(c, "id", None)
+                if cid and cid not in ids_to_remove:
+                    ids_to_remove.append(cid)
+
+        # Remove each by ID (synchronous — blocks until Docker is done).
+        for cid in ids_to_remove:
+            try:
+                subprocess.run(  # noqa: S603 S607
+                    ["docker", "rm", "-f", cid],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=20,
+                    check=False,
+                )
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Belt-and-suspenders: also remove by name in case the label was not set.
+        try:
+            subprocess.run(  # noqa: S603 S607
+                ["docker", "rm", "-f", container_name],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=20,
+                check=False,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     def _create_container(self, scan_id: str, max_retries: int = 2) -> Container:
         container_name = f"strix-scan-{scan_id}"
         image_name = Config.get("strix_image")
@@ -119,12 +180,9 @@ class DockerRuntime(AbstractRuntime):
         last_error: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
-                with contextlib.suppress(NotFound):
-                    existing = self.client.containers.get(container_name)
-                    with contextlib.suppress(Exception):
-                        existing.stop(timeout=5)
-                    existing.remove(force=True)
-                    time.sleep(1)
+                # Synchronously remove any stale containers that share this
+                # name or scan-id label before attempting to create a new one.
+                self._cleanup_existing_containers(container_name, scan_id)
 
                 self._tool_server_port = self._find_available_port()
                 self._caido_port = self._find_available_port()
@@ -155,6 +213,7 @@ class DockerRuntime(AbstractRuntime):
                 )
 
                 self._scan_container = container
+                self._needs_fresh_container = False
                 self._wait_for_tool_server()
 
             except (DockerException, RequestsConnectionError, RequestsTimeout) as e:
@@ -175,6 +234,7 @@ class DockerRuntime(AbstractRuntime):
     def _get_or_create_container(self, scan_id: str) -> Container:
         container_name = f"strix-scan-{scan_id}"
 
+        # Reuse the container that is already running in this session.
         if self._scan_container:
             try:
                 self._scan_container.reload()
@@ -185,6 +245,14 @@ class DockerRuntime(AbstractRuntime):
                 self._tool_server_port = None
                 self._tool_server_token = None
                 self._caido_port = None
+
+        # On the first call in a fresh runtime instance always create a new
+        # container.  Skipping the "find by name/label" look-up prevents
+        # reusing a stale container that a previous session's async docker-rm
+        # hasn't deleted yet — that race condition causes "Container X not
+        # found" errors when the removal completes while agents are mid-scan.
+        if self._needs_fresh_container:
+            return self._create_container(scan_id)
 
         try:
             container = self.client.containers.get(container_name)
@@ -341,8 +409,6 @@ class DockerRuntime(AbstractRuntime):
 
             if container_name is None:
                 return
-
-            import subprocess
 
             subprocess.Popen(  # noqa: S603
                 ["docker", "rm", "-f", container_name],  # noqa: S607
