@@ -177,7 +177,18 @@ class CheckpointManager:
             self._tmp_path.write_text(json_str, encoding="utf-8")
             os.rename(self._tmp_path, self.checkpoint_path)
 
+            with open(Path.home() / "strix_checkpoint_debug.log", "a") as _dbg:
+                _dbg.write(f"SAVED iter={agent_state.iteration} path={self.checkpoint_path}\n")
+
         except Exception as e:  # noqa: BLE001
+            try:
+                with open(Path.home() / "strix_checkpoint_debug.log", "a") as _dbg:
+                    _dbg.write(
+                        f"FAILED iter={getattr(agent_state, 'iteration', '?')} "
+                        f"path={self.checkpoint_path} err={e}\n"
+                    )
+            except Exception:
+                pass
             logger.warning("[Resume] Checkpoint save failed (non-fatal): %s", e)
 
     def load(self) -> "CheckpointModel | None":
