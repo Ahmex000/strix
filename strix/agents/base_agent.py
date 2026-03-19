@@ -78,6 +78,11 @@ class BaseAgent(metaclass=AgentMeta):
             self.state.waiting_timeout = 0
         self.llm = LLM(self.llm_config, agent_name=self.agent_name)
 
+        # Added for Resume Feature - optional, zero impact when absent
+        self._checkpoint_manager = config.get("checkpoint_manager")
+        self._scan_config: dict[str, Any] = config.get("scan_config", {})
+        self._target_hash: str = config.get("target_hash", "")
+
         with contextlib.suppress(Exception):
             self.llm.set_agent_identity(self.state.agent_name, self.state.agent_id)
         self._current_task: asyncio.Task[Any] | None = None
@@ -215,6 +220,18 @@ class BaseAgent(metaclass=AgentMeta):
                 should_finish = await iteration_task
                 self._current_task = None
 
+                # Added for Resume Feature — save checkpoint after every successful
+                # iteration.  Non-fatal: any error is caught inside save().
+                # Only root agents checkpoint (parent_id is None).
+                if self._checkpoint_manager and self.state.parent_id is None:
+                    self._checkpoint_manager.save(
+                        self.state,
+                        tracer,
+                        self._scan_config,
+                        self._target_hash,
+                        self.max_iterations,
+                    )
+
                 if should_finish is None and self.interactive:
                     await self._enter_waiting_state(tracer, text_response=True)
                     continue
@@ -224,6 +241,9 @@ class BaseAgent(metaclass=AgentMeta):
                         self.state.set_completed({"success": True})
                         if tracer:
                             tracer.update_agent_status(self.state.agent_id, "completed")
+                        # Added for Resume Feature — clean completion, remove checkpoint
+                        if self._checkpoint_manager:
+                            self._checkpoint_manager.delete()
                         return self.state.final_result or {}
                     await self._enter_waiting_state(tracer, task_completed=True)
                     continue
@@ -362,7 +382,12 @@ class BaseAgent(metaclass=AgentMeta):
         if not self.state.task:
             self.state.task = task
 
-        self.state.add_message("user", task)
+        # Added for Resume Feature: skip adding the initial task message when
+        # resuming because the full message history is already in state.messages.
+        # On a fresh start state.messages is always empty here — original behavior
+        # is 100% unchanged.
+        if not self.state.messages:
+            self.state.add_message("user", task)
 
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool | None:
         final_response = None

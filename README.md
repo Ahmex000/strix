@@ -177,6 +177,39 @@ strix --target api.your-app.com --instruction "Focus on business logic flaws and
 strix --target api.your-app.com --instruction-file ./instruction.md
 ```
 
+### Resuming Interrupted Scans
+
+Long scans can be interrupted by Ctrl+C, crashes, power loss, or Docker issues.
+Strix automatically saves a checkpoint after every agent iteration so you can resume exactly where you left off.
+
+```bash
+# First run — starts fresh, saves checkpoint automatically
+strix --target https://example.com --run-name my-scan
+
+# If interrupted, run the same command again — auto-resumes from checkpoint
+strix --target https://example.com --run-name my-scan
+
+# Explicit resume flag (same effect, makes intent clear)
+strix --target https://example.com --run-name my-scan --resume
+
+# Force a completely fresh scan (deletes existing checkpoint)
+strix --target https://example.com --run-name my-scan --new
+```
+
+**What is restored on resume:**
+- Full LLM conversation history (the agent remembers everything it did)
+- Discovered vulnerabilities and findings
+- Iteration counter — the agent continues from exactly where it stopped
+- A fresh Docker sandbox is always created (old containers may be gone)
+
+**Checkpoint location:** `strix_runs/<run-name>/checkpoint.json`
+Checkpoints are deleted automatically when a scan completes successfully.
+
+> **Tip:** `--run-name` is optional. If omitted, Strix auto-generates a name like `example-com_a1b2`.
+> Auto-resume only works when you re-use the same `--run-name`.
+
+---
+
 ### Headless Mode
 
 Run Strix programmatically without interactive UI using the `-n/--non-interactive` flag—perfect for servers and automated jobs. The CLI prints real-time vulnerability findings, and the final report before exiting. Exits with non-zero code when vulnerabilities are found.

@@ -20,11 +20,117 @@ from .utils import (
 )
 
 
+# Added for Resume Feature — helpers for CLI resume banner and history replay
+
+def _print_resume_banner(console: Console, run_name: str, iteration: int) -> None:
+    """Print the resume banner so the user knows the scan is continuing."""
+    resume_text = Text()
+    resume_text.append("Resuming interrupted scan", style="bold #22c55e")
+    resume_text.append("\n\n")
+    resume_text.append("Run name  ", style="dim")
+    resume_text.append(run_name, style="bold white")
+    resume_text.append("\n")
+    resume_text.append("Resuming from iteration  ", style="dim")
+    resume_text.append(str(iteration), style="bold white")
+
+    console.print(
+        Panel(
+            resume_text,
+            title="[bold white]STRIX",
+            title_align="left",
+            border_style="#22c55e",
+            padding=(1, 2),
+        )
+    )
+    console.print()
+
+
+def _replay_previous_output(
+    console: Console, checkpoint_data: Any, display_vulnerability: Any
+) -> None:
+    """Re-render previous findings and key messages from the checkpoint.
+
+    Added for Resume Feature — gives the user a sense of what was already
+    discovered before the scan was interrupted.
+    """
+    # Replay vulnerability reports found so far
+    for report in checkpoint_data.tracer_vulnerability_reports:
+        report_id = report.get("id", "unknown")
+        vuln_text = format_vulnerability_report(report)
+        console.print(
+            Panel(
+                vuln_text,
+                title=f"[bold red]{report_id.upper()} [dim](from previous session)[/]",
+                title_align="left",
+                border_style="dark_red",
+                padding=(1, 2),
+            )
+        )
+        console.print()
+
+    # Print a summary of previous agent activity (last few assistant messages)
+    chat_msgs = checkpoint_data.tracer_chat_messages
+    assistant_msgs = [m for m in chat_msgs if m.get("role") == "assistant"]
+    if assistant_msgs:
+        last_msgs = assistant_msgs[-3:]
+        history_text = Text()
+        history_text.append("Last agent activity before interruption\n\n", style="dim")
+        for msg in last_msgs:
+            content = msg.get("content", "")
+            if isinstance(content, str) and content.strip():
+                # Truncate very long messages to keep replay readable
+                snippet = content.strip()[:400]
+                if len(content.strip()) > 400:
+                    snippet += "…"
+                history_text.append(snippet + "\n\n", style="dim white")
+
+        if history_text.plain.strip():
+            console.print(
+                Panel(
+                    history_text,
+                    title="[dim]Previous session activity[/]",
+                    title_align="left",
+                    border_style="dim",
+                    padding=(1, 2),
+                )
+            )
+            console.print()
+
+
 async def run_cli(args: Any) -> None:  # noqa: PLR0915
     console = Console()
 
+    # Added for Resume Feature — detect resume and restore state
+    checkpoint_data = getattr(args, "_checkpoint_data", None)
+    is_resuming = getattr(args, "resume_from_checkpoint", False) and checkpoint_data is not None
+    checkpoint_manager = getattr(args, "_checkpoint_manager", None)
+    target_hash = getattr(args, "_target_hash", "")
+
+    resumed_state = None
+    if is_resuming:
+        from strix.agents.state import AgentState
+
+        resumed_state = AgentState.model_validate(checkpoint_data.agent_state)
+
+        # Give the agent a fresh budget from the resume point so it never
+        # stops just because it hit the original ceiling.
+        # Added for Resume Feature — extend max_iterations dynamically.
+        resumed_state.max_iterations = (
+            resumed_state.iteration + checkpoint_data.original_max_iterations
+        )
+        resumed_state.max_iterations_warning_sent = False  # Reset warning flag
+
+        # Clear sandbox so a fresh container is always created on resume
+        # (the old container may be gone).
+        resumed_state.sandbox_id = None
+        resumed_state.sandbox_token = None
+        resumed_state.sandbox_info = None
+
     start_text = Text()
-    start_text.append("Penetration test initiated", style="bold #22c55e")
+    if is_resuming:
+        start_text.append("Penetration test resumed", style="bold #22c55e")
+    else:
+        start_text.append("Penetration test initiated", style="bold #22c55e")
 
     target_text = Text()
     target_text.append("Target", style="dim")
@@ -75,7 +181,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     }
 
     llm_config = LLMConfig(scan_mode=scan_mode)
-    agent_config = {
+    agent_config: dict[str, Any] = {
         "llm_config": llm_config,
         "max_iterations": 300,
     }
@@ -83,8 +189,29 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
     if getattr(args, "local_sources", None):
         agent_config["local_sources"] = args.local_sources
 
+    # Added for Resume Feature — inject checkpoint manager so the agent saves
+    # state after every iteration.
+    if checkpoint_manager:
+        agent_config["checkpoint_manager"] = checkpoint_manager
+        agent_config["target_hash"] = target_hash
+        agent_config["scan_config"] = scan_config
+
+    # Added for Resume Feature — pass restored state into the agent config
+    if resumed_state is not None:
+        agent_config["state"] = resumed_state
+
     tracer = Tracer(args.run_name)
     tracer.set_scan_config(scan_config)
+
+    # Added for Resume Feature — pre-populate tracer so stats/vulns are correct
+    if is_resuming and checkpoint_data:
+        tracer.chat_messages.extend(checkpoint_data.tracer_chat_messages)
+        tracer.vulnerability_reports.extend(checkpoint_data.tracer_vulnerability_reports)
+
+    # Added for Resume Feature — show resume banner + replay previous output
+    if is_resuming and checkpoint_data:
+        _print_resume_banner(console, args.run_name, checkpoint_data.iteration)
+        _replay_previous_output(console, checkpoint_data, None)
 
     def display_vulnerability(report: dict[str, Any]) -> None:
         report_id = report.get("id", "unknown")

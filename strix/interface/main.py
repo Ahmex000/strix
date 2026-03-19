@@ -366,6 +366,35 @@ Examples:
         help="Path to a custom config file (JSON) to use instead of ~/.strix/cli-config.json",
     )
 
+    # Added for Resume Feature — checkpoint / resume flags
+    parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        dest="run_name_override",
+        help=(
+            "Name for this scan run (used for checkpointing/resume). "
+            "Auto-generated if omitted."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        default=False,
+        help=(
+            "Resume from an existing checkpoint for this run-name + target. "
+            "If no checkpoint is found, starts a fresh scan."
+        ),
+    )
+    parser.add_argument(
+        "--new",
+        "--force-new",
+        action="store_true",
+        default=False,
+        dest="force_new",
+        help="Force a completely fresh scan, deleting any existing checkpoint.",
+    )
+
     args = parser.parse_args()
 
     if args.instruction and args.instruction_file:
@@ -517,6 +546,57 @@ def persist_config() -> None:
         save_current_config()
 
 
+def _setup_checkpoint_on_args(args: argparse.Namespace) -> None:
+    """Resolve checkpoint / resume state and attach it to ``args``.
+
+    Added for Resume Feature.  Sets:
+    - ``args._checkpoint_manager`` — CheckpointManager for this run
+    - ``args._target_hash``        — hash of targets (for validation)
+    - ``args._checkpoint_data``    — loaded CheckpointModel or None
+    - ``args.resume_from_checkpoint`` — True when we should actually resume
+    """
+    from pathlib import Path
+
+    from strix.telemetry.checkpoint import CheckpointManager, compute_target_hash
+
+    run_dir = Path("strix_runs") / args.run_name
+    mgr = CheckpointManager(args.run_name, run_dir)
+    target_hash = compute_target_hash(args.targets_info)
+
+    args._checkpoint_manager = mgr
+    args._target_hash = target_hash
+    args._checkpoint_data = None
+    args.resume_from_checkpoint = False
+
+    if args.force_new:
+        mgr.delete()
+        return
+
+    if mgr.exists():
+        checkpoint = mgr.load()
+        if checkpoint is None:
+            # Corrupted checkpoint — warn and start fresh
+            console = Console()
+            console.print(
+                "[bold yellow]Warning:[/] Checkpoint file is corrupted or unreadable. "
+                "Starting a fresh scan."
+            )
+            return
+
+        if checkpoint.target_hash != target_hash:
+            console = Console()
+            console.print(
+                "[bold yellow]Warning:[/] Checkpoint target mismatch "
+                f"(run '{args.run_name}' was for a different target). "
+                "Starting a fresh scan."
+            )
+            return
+
+        # Valid checkpoint found — auto-resume (or explicit --resume)
+        args._checkpoint_data = checkpoint
+        args.resume_from_checkpoint = True
+
+
 def main() -> None:
     if sys.platform == "win32":
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
@@ -534,7 +614,13 @@ def main() -> None:
 
     persist_config()
 
-    args.run_name = generate_run_name(args.targets_info)
+    # Added for Resume Feature — determine run_name and whether to resume
+    if args.run_name_override:
+        args.run_name = args.run_name_override
+    else:
+        args.run_name = generate_run_name(args.targets_info)
+
+    _setup_checkpoint_on_args(args)
 
     for target_info in args.targets_info:
         if target_info["type"] == "repository":

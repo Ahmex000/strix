@@ -709,6 +709,13 @@ class StrixTUIApp(App):  # type: ignore[misc]
         self.tracer.set_scan_config(self.scan_config)
         set_global_tracer(self.tracer)
 
+        # Added for Resume Feature — pre-populate tracer with checkpoint data so
+        # stats and findings reflect the full scan history including past sessions.
+        _cp = getattr(args, "_checkpoint_data", None)
+        if _cp and getattr(args, "resume_from_checkpoint", False):
+            self.tracer.chat_messages.extend(_cp.tracer_chat_messages)
+            self.tracer.vulnerability_reports.extend(_cp.tracer_vulnerability_reports)
+
         self.agent_nodes: dict[str, TreeNode] = {}
 
         self._displayed_agents: set[str] = set()
@@ -749,13 +756,34 @@ class StrixTUIApp(App):  # type: ignore[misc]
         scan_mode = getattr(args, "scan_mode", "deep")
         llm_config = LLMConfig(scan_mode=scan_mode, interactive=True)
 
-        config = {
+        config: dict[str, Any] = {
             "llm_config": llm_config,
             "max_iterations": 300,
         }
 
         if getattr(args, "local_sources", None):
             config["local_sources"] = args.local_sources
+
+        # Added for Resume Feature — restore agent state and wire up checkpoint
+        _cp = getattr(args, "_checkpoint_data", None)
+        if _cp and getattr(args, "resume_from_checkpoint", False):
+            from strix.agents.state import AgentState
+
+            resumed_state = AgentState.model_validate(_cp.agent_state)
+            # Fresh budget from the resume point
+            resumed_state.max_iterations = resumed_state.iteration + _cp.original_max_iterations
+            resumed_state.max_iterations_warning_sent = False
+            # Always spin up a new sandbox (old container may be gone)
+            resumed_state.sandbox_id = None
+            resumed_state.sandbox_token = None
+            resumed_state.sandbox_info = None
+            config["state"] = resumed_state
+
+        _mgr = getattr(args, "_checkpoint_manager", None)
+        if _mgr:
+            config["checkpoint_manager"] = _mgr
+            config["target_hash"] = getattr(args, "_target_hash", "")
+            config["scan_config"] = self.scan_config
 
         return config
 
