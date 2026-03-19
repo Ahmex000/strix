@@ -263,7 +263,17 @@ def create_agent(
 
         inherited_messages = []
         if inherit_context:
-            inherited_messages = agent_state.get_conversation_history()
+            # Strip system-level resume/interrupt markers from the inherited context so
+            # sub-agents don't misread the root agent's resume instructions as applying
+            # to themselves (which causes them to avoid agent_finish or get confused).
+            inherited_messages = [
+                msg
+                for msg in agent_state.get_conversation_history()
+                if not (
+                    isinstance(msg.get("content"), str)
+                    and msg["content"].startswith("[SYSTEM - SCAN RESUMED]")
+                )
+            ]
 
         _agent_instances[state.agent_id] = agent
 
