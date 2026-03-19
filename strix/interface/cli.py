@@ -97,22 +97,52 @@ def _replay_previous_output(
             console.print()
 
 
-def _build_resume_context_message(state: Any, iteration: int) -> None:
+def _build_resume_context_message(state: Any, checkpoint_data: Any) -> None:
     """Inject a user message telling the LLM it was interrupted and must continue.
 
     Added for Resume Feature — prevents the model from calling finish_scan or
-    agent_finish just because the message history ends abruptly (e.g. a dangling
-    sub-agent tool call that never got a result).
+    agent_finish just because the history ends abruptly, and explicitly lists
+    which sub-agents were alive so the LLM knows what to re-spawn.
     """
+    iteration = checkpoint_data.iteration
+
+    # Collect sub-agents that were NOT completed at the time of interruption
+    # so the LLM knows exactly what to re-create.
+    dead_sub_agents = []
+    for agent_id, node in (checkpoint_data.tracer_agents or {}).items():
+        if node.get("parent_id") is None:
+            continue  # skip root agent
+        status = node.get("status", "unknown")
+        if status not in ("completed", "finished", "stopped", "error", "failed"):
+            dead_sub_agents.append({
+                "name": node.get("name", "sub-agent"),
+                "task": (node.get("task") or "")[:300],
+                "status": status,
+            })
+
+    sub_agent_section = ""
+    if dead_sub_agents:
+        lines = [
+            "\n\nThe following sub-agents were ACTIVE at the time of interruption. "
+            "They no longer exist — their agent IDs are completely invalid. "
+            "Re-spawn each one if their work is not yet reflected in the findings above:"
+        ]
+        for sa in dead_sub_agents:
+            lines.append(f"  • {sa['name']}  (was doing: {sa['task']})")
+        sub_agent_section = "\n".join(lines)
+
     msg = (
         f"[SYSTEM - SCAN RESUMED]\n"
         f"This penetration test was interrupted at iteration {iteration}. "
-        f"All sub-agents that were running have been terminated along with their sandbox. "
-        f"A fresh sandbox will be created automatically. "
-        f"Review the conversation history above to understand what has already been done, "
-        f"then CONTINUE the penetration test from where it left off. "
-        f"Do NOT call finish_scan or agent_finish unless all testing is genuinely complete. "
-        f"Re-spawn any sub-agents needed to continue uncompleted work."
+        f"ALL previous sub-agents have been terminated and their agent IDs no longer exist in the graph. "
+        f"A fresh sandbox will be created automatically.\n\n"
+        f"CRITICAL: Do NOT attempt to send_message_to_agent or interact with ANY agent ID "
+        f"that appears in the conversation history above — every one of those IDs is now dead. "
+        f"Call view_agent_graph to see the current graph (only you, the root agent, exist now)."
+        f"{sub_agent_section}\n\n"
+        f"Review the history to understand what was done, then CONTINUE the penetration test. "
+        f"Re-spawn sub-agents for any incomplete work. "
+        f"Do NOT call finish_scan unless all testing is genuinely complete."
     )
     state.add_message("user", msg)
 
@@ -156,7 +186,7 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
         # or agent_finish just because the history ended abruptly.
         # Without this the model sees a dangling tool call (sub-agent that was
         # killed mid-execution) and may decide the task is complete or broken.
-        _build_resume_context_message(resumed_state, checkpoint_data.iteration)
+        _build_resume_context_message(resumed_state, checkpoint_data)
 
     start_text = Text()
     if is_resuming:

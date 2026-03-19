@@ -304,7 +304,12 @@ def send_message_to_agent(
         if target_agent_id not in _agent_graph["nodes"]:
             return {
                 "success": False,
-                "error": f"Target agent '{target_agent_id}' not found in graph",
+                "error": (
+                    f"Target agent '{target_agent_id}' not found in the agent graph. "
+                    "This ID may be from a previous session that was interrupted. "
+                    "Call view_agent_graph to see which agents currently exist, "
+                    "then use create_agent to re-spawn any needed sub-agents."
+                ),
                 "message_id": None,
             }
 
