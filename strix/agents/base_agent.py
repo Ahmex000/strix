@@ -382,11 +382,14 @@ class BaseAgent(metaclass=AgentMeta):
         if not self.state.task:
             self.state.task = task
 
-        # Added for Resume Feature: skip adding the initial task message when
-        # resuming because the full message history is already in state.messages.
-        # On a fresh start state.messages is always empty here — original behavior
-        # is 100% unchanged.
-        if not self.state.messages:
+        # Added for Resume Feature: only skip the task message when this is the
+        # ROOT agent being resumed (parent_id is None AND messages already has
+        # history from the checkpoint).
+        # Sub-agents can have pre-loaded context messages and still need their task
+        # message added — the old `if not self.state.messages` guard broke them.
+        # Original behavior is 100% unchanged for all non-resume paths.
+        _is_root_resume = (self.state.parent_id is None and bool(self.state.messages))
+        if not _is_root_resume:
             self.state.add_message("user", task)
 
     async def _process_iteration(self, tracer: Optional["Tracer"]) -> bool | None:
