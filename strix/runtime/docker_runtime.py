@@ -3,6 +3,7 @@ import os
 import secrets
 import socket
 import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Any, cast
@@ -42,9 +43,16 @@ class DockerRuntime(AbstractRuntime):
         self._caido_port: int | None = None
         # On the first call we always create a fresh container so we never
         # accidentally reuse a stale container left over from a previous run
-        # whose async docker-rm hasn't finished yet (race condition that causes
-        # "Container X not found" errors mid-scan).
+        # whose async docker-rm hasn't finished yet.
         self._needs_fresh_container: bool = True
+        # Protects _needs_fresh_container + _scan_container initialisation so
+        # that when multiple sub-agent threads start at the same time only ONE
+        # thread actually creates the Docker container.  All others wait, then
+        # reuse the already-running container.  Without this lock every thread
+        # that sees _needs_fresh_container=True calls _create_container, which
+        # removes the container its sibling just created → only 1 agent ends up
+        # with a live container and the rest get "Container X not found".
+        self._container_init_lock: threading.Lock = threading.Lock()
 
     def _find_available_port(self) -> int:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
@@ -234,7 +242,8 @@ class DockerRuntime(AbstractRuntime):
     def _get_or_create_container(self, scan_id: str) -> Container:
         container_name = f"strix-scan-{scan_id}"
 
-        # Reuse the container that is already running in this session.
+        # Fast path: container is already running in this session.
+        # Checked outside the lock so established sessions pay zero contention cost.
         if self._scan_container:
             try:
                 self._scan_container.reload()
@@ -246,46 +255,65 @@ class DockerRuntime(AbstractRuntime):
                 self._tool_server_token = None
                 self._caido_port = None
 
-        # On the first call in a fresh runtime instance always create a new
-        # container.  Skipping the "find by name/label" look-up prevents
-        # reusing a stale container that a previous session's async docker-rm
-        # hasn't deleted yet — that race condition causes "Container X not
-        # found" errors when the removal completes while agents are mid-scan.
-        if self._needs_fresh_container:
-            return self._create_container(scan_id)
+        # Slow path — acquire the lock.
+        # Only ONE thread (whichever wins the lock) actually creates the
+        # container.  All other threads that are waiting simply re-check
+        # _scan_container inside the lock and return the already-created one.
+        # This eliminates the race where N sub-agent threads all see
+        # _needs_fresh_container=True, each call _create_container, and each
+        # removes the container the previous thread just created.
+        with self._container_init_lock:
+            # Re-check under the lock: a sibling thread may have created it
+            # while we were waiting.
+            if self._scan_container:
+                try:
+                    self._scan_container.reload()
+                    if self._scan_container.status == "running":
+                        return self._scan_container
+                except NotFound:
+                    self._scan_container = None
+                    self._tool_server_port = None
+                    self._tool_server_token = None
+                    self._caido_port = None
 
-        try:
-            container = self.client.containers.get(container_name)
-            container.reload()
+            # First call in this runtime instance: always create fresh so we
+            # never reuse a stale container from a previous run whose
+            # background docker-rm hasn't completed yet.
+            if self._needs_fresh_container:
+                return self._create_container(scan_id)
 
-            if container.status != "running":
-                container.start()
-                time.sleep(2)
+            try:
+                container = self.client.containers.get(container_name)
+                container.reload()
 
-            self._scan_container = container
-            self._recover_container_state(container)
-        except NotFound:
-            pass
-        else:
-            return container
-
-        try:
-            containers = self.client.containers.list(
-                all=True, filters={"label": f"strix-scan-id={scan_id}"}
-            )
-            if containers:
-                container = containers[0]
                 if container.status != "running":
                     container.start()
                     time.sleep(2)
 
                 self._scan_container = container
                 self._recover_container_state(container)
+            except NotFound:
+                pass
+            else:
                 return container
-        except DockerException:
-            pass
 
-        return self._create_container(scan_id)
+            try:
+                containers = self.client.containers.list(
+                    all=True, filters={"label": f"strix-scan-id={scan_id}"}
+                )
+                if containers:
+                    container = containers[0]
+                    if container.status != "running":
+                        container.start()
+                        time.sleep(2)
+
+                    self._scan_container = container
+                    self._recover_container_state(container)
+                    return container
+            except DockerException:
+                pass
+
+            return self._create_container(scan_id)
 
     def _copy_local_directory_to_container(
         self, container: Container, local_path: str, target_name: str | None = None
