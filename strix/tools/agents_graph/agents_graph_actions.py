@@ -20,6 +20,9 @@ _agent_instances: dict[str, Any] = {}
 
 _agent_states: dict[str, Any] = {}
 
+# Lock guarding concurrent reads/writes to _running_agents and _agent_instances
+_agents_lock: threading.Lock = threading.Lock()
+
 
 def _run_agent_in_thread(
     agent: Any, state: Any, inherited_messages: list[dict[str, Any]]
@@ -86,8 +89,9 @@ def _run_agent_in_thread(
         _agent_graph["nodes"][state.agent_id]["status"] = "error"
         _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
         _agent_graph["nodes"][state.agent_id]["result"] = {"error": str(e)}
-        _running_agents.pop(state.agent_id, None)
-        _agent_instances.pop(state.agent_id, None)
+        with _agents_lock:
+            _running_agents.pop(state.agent_id, None)
+            _agent_instances.pop(state.agent_id, None)
         raise
     else:
         if state.stop_requested:
@@ -96,8 +100,9 @@ def _run_agent_in_thread(
             _agent_graph["nodes"][state.agent_id]["status"] = "completed"
         _agent_graph["nodes"][state.agent_id]["finished_at"] = datetime.now(UTC).isoformat()
         _agent_graph["nodes"][state.agent_id]["result"] = result
-        _running_agents.pop(state.agent_id, None)
-        _agent_instances.pop(state.agent_id, None)
+        with _agents_lock:
+            _running_agents.pop(state.agent_id, None)
+            _agent_instances.pop(state.agent_id, None)
 
         return {"result": result}
 
@@ -227,7 +232,8 @@ def create_agent(
         from strix.agents.state import AgentState
         from strix.llm.config import LLMConfig
 
-        parent_agent = _agent_instances.get(parent_id)
+        with _agents_lock:
+            parent_agent = _agent_instances.get(parent_id)
 
         timeout = None
         scan_mode = "deep"
@@ -278,7 +284,8 @@ def create_agent(
                 )
             ]
 
-        _agent_instances[state.agent_id] = agent
+        with _agents_lock:
+            _agent_instances[state.agent_id] = agent
 
         thread = threading.Thread(
             target=_run_agent_in_thread,
@@ -287,7 +294,8 @@ def create_agent(
             name=f"Agent-{name}-{state.agent_id}",
         )
         thread.start()
-        _running_agents[state.agent_id] = thread
+        with _agents_lock:
+            _running_agents[state.agent_id] = thread
 
     except Exception as e:  # noqa: BLE001
         return {"success": False, "error": f"Failed to create agent: {e}", "agent_id": None}
@@ -471,7 +479,8 @@ def agent_finish(
 
                 parent_notified = True
 
-        _running_agents.pop(agent_id, None)
+        with _agents_lock:
+            _running_agents.pop(agent_id, None)
 
         return {
             "agent_completed": True,
@@ -518,8 +527,9 @@ def stop_agent(agent_id: str) -> dict[str, Any]:
             agent_state = _agent_states[agent_id]
             agent_state.request_stop()
 
-        if agent_id in _agent_instances:
-            agent_instance = _agent_instances[agent_id]
+        with _agents_lock:
+            agent_instance = _agent_instances.get(agent_id)
+        if agent_instance is not None:
             if hasattr(agent_instance, "state"):
                 agent_instance.state.request_stop()
             if hasattr(agent_instance, "cancel_current_execution"):

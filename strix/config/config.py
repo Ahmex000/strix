@@ -139,17 +139,15 @@ class Config:
                 env_vars.pop(var_name, None)
             if cls._config_file_override is None:
                 cls.save({"env": env_vars})
-        if cls._llm_env_changed(env_vars):
-            for var_name in cls._llm_env_vars():
-                env_vars.pop(var_name, None)
-            if cls._config_file_override is None:
-                cls.save({"env": env_vars})
         applied = {}
 
+        llm_vars = cls._llm_env_vars()
         for var_name, var_value in env_vars.items():
-            if var_name in cls.tracked_vars() and (force or var_name not in os.environ):
-                os.environ[var_name] = var_value
-                applied[var_name] = var_value
+            if var_name in cls.tracked_vars():
+                # LLM vars in cli-config.json always win over shell env
+                if var_name in llm_vars or force or var_name not in os.environ:
+                    os.environ[var_name] = var_value
+                    applied[var_name] = var_value
 
         return applied
 
