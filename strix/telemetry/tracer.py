@@ -294,7 +294,7 @@ class Tracer:
 
     def get_run_dir(self) -> Path:
         if self._run_dir is None:
-            runs_dir = Path.home() / "strix_runs"
+            runs_dir = Path.cwd() / "strix_runs"
             runs_dir.mkdir(exist_ok=True)
 
             run_dir_name = self.run_name if self.run_name else self.run_id

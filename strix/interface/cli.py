@@ -11,6 +11,8 @@ from rich.panel import Panel
 from rich.text import Text
 
 from strix.agents.StrixAgent import StrixAgent
+from strix.interface.checkpoint_restore import build_root_resume_message as _build_resume_context_message
+from strix.interface.checkpoint_restore import restore_sub_agents as _restore_sub_agents
 from strix.llm.config import LLMConfig
 from strix.telemetry.tracer import Tracer, set_global_tracer
 
@@ -97,8 +99,6 @@ def _replay_previous_output(
             console.print()
 
 
-from strix.interface.checkpoint_restore import build_root_resume_message as _build_resume_context_message  # noqa: E402
-from strix.interface.checkpoint_restore import restore_sub_agents as _restore_sub_agents  # noqa: E402
 
 
 async def run_cli(args: Any) -> None:  # noqa: PLR0915

@@ -29,6 +29,8 @@ from textual.widgets import Button, Label, Static, TextArea, Tree
 from textual.widgets.tree import TreeNode
 
 from strix.agents.StrixAgent import StrixAgent
+from strix.interface.checkpoint_restore import build_root_resume_message as _build_root_resume_message
+from strix.interface.checkpoint_restore import restore_sub_agents as _restore_sub_agents_tui
 from strix.interface.streaming_parser import parse_streaming_content
 from strix.interface.tool_components.agent_message_renderer import AgentMessageRenderer
 from strix.interface.tool_components.registry import get_tool_renderer
@@ -39,10 +41,6 @@ from strix.telemetry.tracer import Tracer, set_global_tracer
 
 
 logger = logging.getLogger(__name__)
-
-
-from strix.interface.checkpoint_restore import build_root_resume_message as _build_root_resume_message  # noqa: E402
-from strix.interface.checkpoint_restore import restore_sub_agents as _restore_sub_agents_tui  # noqa: E402
 def get_package_version() -> str:
     try:
         return pkg_version("strix-agent")

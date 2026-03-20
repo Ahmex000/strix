@@ -144,7 +144,9 @@ class CheckpointManager:
             try:
                 from strix.tools.agents_graph import agents_graph_actions
 
-                for sid, inst in list(agents_graph_actions._agent_instances.items()):
+                with agents_graph_actions._agents_lock:
+                    snapshot = list(agents_graph_actions._agent_instances.items())
+                for sid, inst in snapshot:
                     s = getattr(inst, "state", None)
                     if s is not None and s.parent_id is not None:
                         sub_agent_states[sid] = (
@@ -176,19 +178,9 @@ class CheckpointManager:
             )
             self._tmp_path.write_text(json_str, encoding="utf-8")
             os.rename(self._tmp_path, self.checkpoint_path)
-
-            with open(Path.home() / "strix_checkpoint_debug.log", "a") as _dbg:
-                _dbg.write(f"SAVED iter={agent_state.iteration} path={self.checkpoint_path}\n")
+            logger.debug("[Resume] Checkpoint saved iter=%s path=%s", agent_state.iteration, self.checkpoint_path)
 
         except Exception as e:  # noqa: BLE001
-            try:
-                with open(Path.home() / "strix_checkpoint_debug.log", "a") as _dbg:
-                    _dbg.write(
-                        f"FAILED iter={getattr(agent_state, 'iteration', '?')} "
-                        f"path={self.checkpoint_path} err={e}\n"
-                    )
-            except Exception:
-                pass
             logger.warning("[Resume] Checkpoint save failed (non-fatal): %s", e)
 
     def load(self) -> "CheckpointModel | None":

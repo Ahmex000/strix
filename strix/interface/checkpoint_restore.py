@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import threading
+from datetime import UTC, datetime
 from typing import Any
 
 
@@ -91,6 +92,15 @@ def restore_sub_agents(checkpoint_data: Any, llm_config: Any) -> list[str]:
             t.start()
             with agents_graph_actions._agents_lock:
                 agents_graph_actions._running_agents[agent_id] = t
+                agents_graph_actions._agent_instances[agent_id] = agent
+                agents_graph_actions._agent_states[agent_id] = state
+            agents_graph_actions._agent_graph["nodes"][agent_id] = {
+                "status": "running",
+                "name": state.agent_name,
+                "task": state.task,
+                "parent_id": state.parent_id,
+                "started_at": datetime.now(UTC).isoformat(),
+            }
             restored_ids.append(agent_id)
 
         except Exception:  # noqa: BLE001
