@@ -141,11 +141,10 @@ class Config:
                 cls.save({"env": env_vars})
         applied = {}
 
-        llm_vars = cls._llm_env_vars()
         for var_name, var_value in env_vars.items():
             if var_name in cls.tracked_vars():
-                # LLM vars in cli-config.json always win over shell env
-                if var_name in llm_vars or force or var_name not in os.environ:
+                # Shell env wins unless --force or the var is not set in shell.
+                if force or var_name not in os.environ:
                     os.environ[var_name] = var_value
                     applied[var_name] = var_value
 

@@ -814,6 +814,9 @@ class StrixTUIApp(App):  # type: ignore[misc]
                 return
             if _checkpoint_saved.is_set():
                 return
+            # Skip if the scan already completed — nothing to resume.
+            if getattr(agent.state, "completed", False):
+                return
             _checkpoint_saved.set()
             try:
                 mgr.save(
@@ -2021,14 +2024,16 @@ class StrixTUIApp(App):  # type: ignore[misc]
         _agent = getattr(self, "_current_agent", None)
         if _mgr and _agent:
             import contextlib
-            with contextlib.suppress(Exception):
-                _mgr.save(
-                    _agent.state,
-                    self.tracer,
-                    self.scan_config,
-                    self.agent_config.get("target_hash", ""),
-                    _agent.max_iterations,
-                )
+            # Only save if the scan was interrupted, not if it finished cleanly.
+            if not getattr(_agent.state, "completed", False):
+                with contextlib.suppress(Exception):
+                    _mgr.save(
+                        _agent.state,
+                        self.tracer,
+                        self.scan_config,
+                        self.agent_config.get("target_hash", ""),
+                        _agent.max_iterations,
+                    )
 
         self.tracer.cleanup()
 

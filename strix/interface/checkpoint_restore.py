@@ -34,12 +34,11 @@ def restore_sub_agents(checkpoint_data: Any, llm_config: Any) -> list[str]:
     def _depth(aid: str) -> int:
         if aid in _memo:
             return _memo[aid]
+        # Mark before recursing to break any cycle in corrupted checkpoints.
+        _memo[aid] = 0
         parent = sub_agent_states.get(aid, {}).get("parent_id")
-        _memo[aid] = (
-            0
-            if (parent is None or parent not in sub_agent_states)
-            else 1 + _depth(parent)
-        )
+        if parent is not None and parent in sub_agent_states:
+            _memo[aid] = 1 + _depth(parent)
         return _memo[aid]
 
     restored_ids: list[str] = []

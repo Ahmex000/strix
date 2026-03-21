@@ -266,9 +266,13 @@ async def run_cli(args: Any) -> None:  # noqa: PLR0915
             return
         if _checkpoint_saved.is_set():
             return
+        agent_instance = _agent_ref[0]
+        # Skip if the scan already completed successfully — the checkpoint
+        # was deleted in base_agent.py and there is nothing to resume.
+        if getattr(agent_instance.state, "completed", False):
+            return
         _checkpoint_saved.set()
         try:
-            agent_instance = _agent_ref[0]
             checkpoint_manager.save(
                 agent_instance.state,
                 tracer,
