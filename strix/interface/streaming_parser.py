@@ -2,7 +2,6 @@ import html
 import re
 from dataclasses import dataclass
 from typing import Literal
-
 from strix.llm.utils import normalize_tool_format
 
 

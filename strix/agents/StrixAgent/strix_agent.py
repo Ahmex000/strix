@@ -38,6 +38,7 @@ class StrixAgent(BaseAgent):
         if self.state.parent_id is None:
             self.state.max_phases = mode_cfg["max_phases"]
 
+    # mooox-Agent Scans (Repo, local code, Url web_application, IP-Address )
     async def execute_scan(self, scan_config: dict[str, Any]) -> dict[str, Any]:  # noqa: PLR0912
         user_instructions = scan_config.get("user_instructions", "")
         targets = scan_config.get("targets", [])

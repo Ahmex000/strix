@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Strix Agent Interface
+mooox-Agent Interface
 """
 
 import argparse

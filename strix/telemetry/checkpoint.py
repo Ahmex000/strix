@@ -1,4 +1,4 @@
-"""Checkpoint system for Strix scan resume feature.
+"""Checkpoint system for mooox-Agent scan resume feature.
 
 Added for Resume Feature - Original behavior is 100% unchanged when
 checkpoint_manager is not injected into the agent config.
