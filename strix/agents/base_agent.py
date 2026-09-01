@@ -3,7 +3,6 @@ import contextlib
 import logging
 from typing import TYPE_CHECKING, Any, Optional
 
-
 if TYPE_CHECKING:
     from strix.telemetry.tracer import Tracer
 

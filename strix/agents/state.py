@@ -10,22 +10,30 @@ def _generate_agent_id() -> str:
 
 
 class AgentState(BaseModel):
+    # Unique identifier for the agent instance
     agent_id: str = Field(default_factory=_generate_agent_id)
-    agent_name: str = "Strix Agent"
+    agent_name: str = "mooox Agent" # Strix Agent
     parent_id: str | None = None
+
+    # Optional identifiers for sandbox execution context
     sandbox_id: str | None = None
     sandbox_token: str | None = None
     sandbox_info: dict[str, Any] | None = None
 
+    # The task the agent is currently working on
     task: str = ""
     iteration: int = 0
     max_iterations: int = 300
+
+    # Flags to track the state of the agent's execution
     completed: bool = False
     stop_requested: bool = False
     waiting_for_input: bool = False
     llm_failed: bool = False
     waiting_start_time: datetime | None = None
     waiting_timeout: int = 600
+
+    # Final result and warnings
     final_result: dict[str, Any] | None = None
     max_iterations_warning_sent: bool = False
 
@@ -35,6 +43,7 @@ class AgentState(BaseModel):
     max_phases: int = 4
     phase_iteration_start: int = 0
 
+    # Data structures to hold messages, context, actions, observations, and errors
     messages: list[dict[str, Any]] = Field(default_factory=list)
     context: dict[str, Any] = Field(default_factory=dict)
 
@@ -59,6 +68,7 @@ class AgentState(BaseModel):
         self.messages.append(message)
         self.last_updated = datetime.now(UTC).isoformat()
 
+    # Register Agent Actions
     def add_action(self, action: dict[str, Any]) -> None:
         self.actions_taken.append(
             {
@@ -68,6 +78,7 @@ class AgentState(BaseModel):
             }
         )
 
+    # Register Agent observation
     def add_observation(self, observation: dict[str, Any]) -> None:
         self.observations.append(
             {
@@ -85,15 +96,18 @@ class AgentState(BaseModel):
         self.context[key] = value
         self.last_updated = datetime.now(UTC).isoformat()
 
+    # Request the agent to stop execution (should_stop Below)
     def set_completed(self, final_result: dict[str, Any] | None = None) -> None:
         self.completed = True
         self.final_result = final_result
         self.last_updated = datetime.now(UTC).isoformat()
 
+    # Request the agent to stop execution (should_stop Below)
     def request_stop(self) -> None:
         self.stop_requested = True
         self.last_updated = datetime.now(UTC).isoformat()
 
+    # Check if the agent should stop execution
     def should_stop(self) -> bool:
         return self.stop_requested or self.completed or self.has_reached_max_iterations()
 
@@ -155,7 +169,8 @@ class AgentState(BaseModel):
 
     def get_conversation_history(self) -> list[dict[str, Any]]:
         return self.messages
-
+    
+    # Get a summary of the agent's execution state
     def get_execution_summary(self) -> dict[str, Any]:
         return {
             "agent_id": self.agent_id,
